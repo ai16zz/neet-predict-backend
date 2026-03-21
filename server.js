@@ -77,6 +77,7 @@ app.post('/exit', async (req, res) => {
     if (!round) return res.status(400).json({ error: 'No active round' });
     if (round.end_time - Date.now() < 15000) return res.status(400).json({ error: 'Too close to settlement to exit' });
 
+    const FEE = parseFloat(process.env.FEE || '0.03');
     const { getBetById } = require('./db');
     const bet = getBetById(bet_id);
     if (!bet) return res.status(404).json({ error: 'Bet not found' });
