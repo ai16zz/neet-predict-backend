@@ -58,8 +58,26 @@ async function payoutWinners(roundId, outcome, round) {
   }
 
   const winners = bets.filter(b => b.direction === outcome);
+  const losers = bets.filter(b => b.direction !== outcome);
   const totalWin = winners.reduce((s, b) => s + b.amount, 0);
   const totalAll = bets.reduce((s, b) => s + b.amount, 0);
+
+  // If nobody bet the losing side, refund everyone fully (no game happened)
+  if (losers.length === 0) {
+    console.log(`[rounds] One-sided round #${roundId} — refunding all ${bets.length} bets`);
+    for (const bet of bets) {
+      if (bet.paid_out) continue;
+      try {
+        const sig = await sendPayout(bet.wallet, bet.amount); // full refund
+        updateBet(bet.id, { paid_out: 1, payout_sig: sig });
+        console.log(`[rounds] Full refund ${bet.amount.toFixed(4)} SOL → ${bet.wallet}`);
+      } catch (e) {
+        console.error(`[rounds] Refund failed bet#${bet.id}: ${e.message}`);
+      }
+    }
+    return;
+  }
+
   const payoutPool = totalAll * (1 - FEE);
 
   for (const bet of winners) {
