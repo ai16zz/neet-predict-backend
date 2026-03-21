@@ -61,4 +61,4 @@ async function verifyDeposit(txSig, expectedWallet, minAmountSol) {
   }
 }
 
-module.exports = { sendPayout, verifyDeposit, getTreasury };
+module.exports = { sendPayout, verifyDeposit, getTreasury, connection };

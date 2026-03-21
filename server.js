@@ -67,6 +67,31 @@ app.get('/price', async (_, res) => {
   res.json({ price: await getPrice() });
 });
 
+// ── Send TX proxy ─────────────────────────────────────────
+app.post('/send-tx', async (req, res) => {
+  try {
+    const { tx } = req.body;
+    if (!tx) return res.status(400).json({ error: 'Missing tx' });
+    const { connection } = require('./solana');
+    const raw = Buffer.from(tx);
+    const signature = await connection.sendRawTransaction(raw, { skipPreflight: false });
+    await connection.confirmTransaction(signature, 'confirmed');
+    res.json({ signature });
+  } catch (e) {
+    console.error('[send-tx]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Blockhash proxy (browser can't call RPC directly) ─────
+app.get('/blockhash', async (_, res) => {
+  try {
+    const { connection } = require('./solana');
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    res.json({ blockhash, lastValidBlockHeight });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.listen(PORT, () => {
   console.log(`[server] NEET predict backend running on port ${PORT}`);
   roundLoop();
