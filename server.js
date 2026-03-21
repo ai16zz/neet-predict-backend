@@ -52,9 +52,9 @@ app.post('/bet', async (req, res) => {
     const verified = await verifyDeposit(tx_sig, wallet, amount);
     if (!verified) return res.status(400).json({ error: 'Could not verify transaction' });
 
-    insertBet({ round_id: round.id, wallet, direction, amount: verified.amount, tx_sig });
+    const newBet = insertBet({ round_id: round.id, wallet, direction, amount: verified.amount, tx_sig });
     console.log(`[bet] ${wallet} → ${direction} ${verified.amount} SOL (round #${round.id})`);
-    res.json({ success: true, round_id: round.id });
+    res.json({ success: true, round_id: round.id, bet_id: newBet.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -65,6 +65,48 @@ app.get('/positions/:wallet', (req, res) => {
 
 app.get('/price', async (_, res) => {
   res.json({ price: await getPrice() });
+});
+
+// ── Early exit ────────────────────────────────────────────
+app.post('/exit', async (req, res) => {
+  try {
+    const { wallet, bet_id } = req.body;
+    if (!wallet || !bet_id) return res.status(400).json({ error: 'Missing fields' });
+
+    const round = getCurrentRound();
+    if (!round) return res.status(400).json({ error: 'No active round' });
+    if (round.end_time - Date.now() < 15000) return res.status(400).json({ error: 'Too close to settlement to exit' });
+
+    const { getBetById } = require('./db');
+    const bet = getBetById(bet_id);
+    if (!bet) return res.status(404).json({ error: 'Bet not found' });
+    if (bet.wallet !== wallet) return res.status(403).json({ error: 'Not your bet' });
+    if (bet.paid_out) return res.status(400).json({ error: 'Already settled' });
+    if (bet.exited) return res.status(400).json({ error: 'Already exited' });
+    if (bet.round_id !== round.id) return res.status(400).json({ error: 'Bet is not in current round' });
+
+    // Calculate exit value at current odds
+    const bets = getBetsForRound(round.id).filter(b => !b.exited);
+    const totalUp = bets.filter(b => b.direction === 'UP').reduce((s, b) => s + b.amount, 0);
+    const totalDown = bets.filter(b => b.direction === 'DOWN').reduce((s, b) => s + b.amount, 0);
+    const totalPool = totalUp + totalDown;
+    const myPool = bet.direction === 'UP' ? totalUp : totalDown;
+    const multiplier = myPool > 0 ? (totalPool * (1 - FEE)) / myPool : 1;
+    const exitValue = Math.min(bet.amount * multiplier, bet.amount * 1.95); // cap at 1.95x
+    const payout = Math.max(exitValue * (1 - FEE), bet.amount * 0.5); // min 50% back
+
+    const { updateBet } = require('./db');
+    updateBet(bet_id, { exited: 1, paid_out: 1 });
+
+    const sig = await require('./solana').sendPayout(wallet, payout);
+    updateBet(bet_id, { payout_sig: sig });
+
+    console.log(`[exit] ${wallet} exited bet#${bet_id} → ${payout.toFixed(4)} SOL`);
+    res.json({ success: true, payout, signature: sig });
+  } catch (e) {
+    console.error('[exit]', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Send TX proxy ─────────────────────────────────────────

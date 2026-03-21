@@ -50,11 +50,16 @@ function insertBet({ round_id, wallet, direction, amount, tx_sig }) {
     amount,
     tx_sig,
     paid_out: 0,
+    exited: 0,
     payout_sig: null,
     created_at: Date.now(),
   };
   bets.push(bet);
   return bet;
+}
+
+function getBetById(id) {
+  return bets.find(b => b.id === parseInt(id)) || null;
 }
 
 function updateBet(id, fields) {
@@ -83,5 +88,5 @@ function getPositionsForWallet(wallet) {
 
 module.exports = {
   insertRound, updateRound, getCurrentRound, getRoundById, getRecentRounds,
-  insertBet, updateBet, getBetsForRound, getBetByTxSig, getPositionsForWallet,
+  insertBet, updateBet, getBetsForRound, getBetByTxSig, getBetById, getPositionsForWallet,
 };
