@@ -1,49 +1,20 @@
-const db = require('./db');
+const {
+  insertRound, updateRound, getCurrentRound, getRoundById,
+  getRecentRounds, getBetsForRound, updateBet, getPositionsForWallet
+} = require('./db');
 const { getPrice } = require('./price');
 const { sendPayout } = require('./solana');
 
-const ROUND_DURATION = 5 * 60 * 1000; // 5 minutes
+const ROUND_DURATION = 5 * 60 * 1000;
 const FEE = parseFloat(process.env.FEE || '0.03');
 const MIN_BET = parseFloat(process.env.MIN_BET || '0.05');
 
-function getCurrentRound() {
-  return db.prepare('SELECT * FROM rounds WHERE settled = 0 ORDER BY id DESC LIMIT 1').get();
-}
-
-function getRoundById(id) {
-  return db.prepare('SELECT * FROM rounds WHERE id = ?').get(id);
-}
-
-function getRecentRounds(limit = 10) {
-  return db.prepare('SELECT * FROM rounds WHERE settled = 1 ORDER BY id DESC LIMIT ?').all(limit);
-}
-
-function getBetsForRound(roundId) {
-  return db.prepare('SELECT * FROM bets WHERE round_id = ?').all(roundId);
-}
-
-function getPositionsForWallet(wallet) {
-  return db.prepare(`
-    SELECT b.*, r.outcome, r.start_price, r.end_price, r.end_time
-    FROM bets b
-    JOIN rounds r ON b.round_id = r.id
-    WHERE b.wallet = ?
-    ORDER BY b.id DESC
-    LIMIT 20
-  `).all(wallet);
-}
-
 async function startNewRound() {
   const now = Date.now();
-  const endTime = now + ROUND_DURATION;
   const startPrice = await getPrice();
-
-  const result = db.prepare(
-    'INSERT INTO rounds (start_time, end_time, start_price) VALUES (?, ?, ?)'
-  ).run(now, endTime, startPrice);
-
-  console.log(`[rounds] New round #${result.lastInsertRowid} started. Price: $${startPrice}`);
-  return result.lastInsertRowid;
+  const round = insertRound({ start_time: now, end_time: now + ROUND_DURATION, start_price: startPrice });
+  console.log(`[rounds] New round #${round.id} started. Price: $${startPrice}`);
+  return round;
 }
 
 async function settleRound(roundId) {
@@ -52,7 +23,7 @@ async function settleRound(roundId) {
 
   const endPrice = await getPrice();
   if (!endPrice) {
-    console.error('[rounds] Could not get price for settlement, retrying in 30s...');
+    console.error('[rounds] Could not get price, retrying in 30s');
     setTimeout(() => settleRound(roundId), 30000);
     return;
   }
@@ -61,78 +32,60 @@ async function settleRound(roundId) {
   if (endPrice > round.start_price) outcome = 'UP';
   else if (endPrice < round.start_price) outcome = 'DOWN';
 
-  db.prepare(
-    'UPDATE rounds SET end_price = ?, outcome = ?, settled = 1 WHERE id = ?'
-  ).run(endPrice, outcome, roundId);
+  updateRound(roundId, { end_price: endPrice, outcome, settled: 1 });
+  console.log(`[rounds] Round #${roundId} settled: ${outcome} ($${round.start_price} → $${endPrice})`);
 
-  console.log(`[rounds] Round #${roundId} settled. Outcome: ${outcome} ($${round.start_price} → $${endPrice})`);
-
-  // Pay out winners
-  await payoutWinners(roundId, outcome);
+  await payoutWinners(roundId, outcome, round);
 }
 
-async function payoutWinners(roundId, outcome) {
+async function payoutWinners(roundId, outcome, round) {
+  const bets = getBetsForRound(roundId);
+  if (!bets.length) return;
+
   if (outcome === 'DRAW') {
-    // Refund everyone minus fee
-    const bets = getBetsForRound(roundId);
     for (const bet of bets) {
       if (bet.paid_out) continue;
       try {
         const refund = bet.amount * (1 - FEE);
         const sig = await sendPayout(bet.wallet, refund);
-        db.prepare('UPDATE bets SET paid_out = 1, payout_sig = ? WHERE id = ?').run(sig, bet.id);
-        console.log(`[rounds] Refund ${refund.toFixed(4)} SOL → ${bet.wallet}`);
+        updateBet(bet.id, { paid_out: 1, payout_sig: sig });
+        console.log(`[rounds] Refunded ${refund.toFixed(4)} SOL → ${bet.wallet}`);
       } catch (e) {
-        console.error(`[rounds] Payout failed for bet ${bet.id}:`, e.message);
+        console.error(`[rounds] Refund failed bet#${bet.id}: ${e.message}`);
       }
     }
     return;
   }
 
-  const bets = getBetsForRound(roundId);
   const winners = bets.filter(b => b.direction === outcome);
-  const losers = bets.filter(b => b.direction !== outcome);
-
-  const totalWinPool = winners.reduce((s, b) => s + b.amount, 0);
-  const totalLosePool = losers.reduce((s, b) => s + b.amount, 0);
-  const totalPool = totalWinPool + totalLosePool;
-  const payoutPool = totalPool * (1 - FEE);
+  const totalWin = winners.reduce((s, b) => s + b.amount, 0);
+  const totalAll = bets.reduce((s, b) => s + b.amount, 0);
+  const payoutPool = totalAll * (1 - FEE);
 
   for (const bet of winners) {
     if (bet.paid_out) continue;
     try {
-      const share = bet.amount / totalWinPool;
-      const payout = payoutPool * share;
+      const payout = payoutPool * (bet.amount / totalWin);
       const sig = await sendPayout(bet.wallet, payout);
-      db.prepare('UPDATE bets SET paid_out = 1, payout_sig = ? WHERE id = ?').run(sig, bet.id);
-      console.log(`[rounds] Payout ${payout.toFixed(4)} SOL → ${bet.wallet}`);
+      updateBet(bet.id, { paid_out: 1, payout_sig: sig });
+      console.log(`[rounds] Paid ${payout.toFixed(4)} SOL → ${bet.wallet}`);
     } catch (e) {
-      console.error(`[rounds] Payout failed for bet ${bet.id}:`, e.message);
+      console.error(`[rounds] Payout failed bet#${bet.id}: ${e.message}`);
     }
   }
 }
 
 async function roundLoop() {
   let current = getCurrentRound();
+  if (!current) current = await startNewRound();
 
-  if (!current) {
-    const id = await startNewRound();
-    current = getRoundById(id);
-  }
+  const msLeft = Math.max(0, current.end_time - Date.now());
+  console.log(`[rounds] Round #${current.id} — ${Math.round(msLeft / 1000)}s left`);
 
-  const now = Date.now();
-  const msLeft = current.end_time - now;
-
-  if (msLeft <= 0) {
+  setTimeout(async () => {
     await settleRound(current.id);
     setTimeout(roundLoop, 2000);
-  } else {
-    console.log(`[rounds] Round #${current.id} active. ${Math.round(msLeft / 1000)}s remaining.`);
-    setTimeout(async () => {
-      await settleRound(current.id);
-      setTimeout(roundLoop, 2000);
-    }, msLeft);
-  }
+  }, msLeft);
 }
 
 module.exports = { roundLoop, getCurrentRound, getRoundById, getRecentRounds, getBetsForRound, getPositionsForWallet, MIN_BET };
