@@ -80,7 +80,23 @@ function getPositionsForWallet(wallet) {
     .filter(b => b.wallet === wallet)
     .map(b => {
       const round = getRoundById(b.round_id);
-      return { ...b, outcome: round?.outcome, start_price: round?.start_price, end_price: round?.end_price, end_time: round?.end_time };
+      return {
+        id: b.id,
+        round_id: b.round_id,
+        wallet: b.wallet,
+        direction: b.direction,
+        amount: b.amount,
+        tx_sig: b.tx_sig,
+        paid_out: b.paid_out,
+        exited: b.exited || 0,
+        payout_sig: b.payout_sig,
+        created_at: b.created_at,
+        outcome: round?.outcome,
+        start_price: round?.start_price,
+        end_price: round?.end_price,
+        end_time: round?.end_time,
+        settled: round?.settled || 0,
+      };
     })
     .reverse()
     .slice(0, 20);
