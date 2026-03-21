@@ -1,102 +1,83 @@
-// In-memory store — persists for the life of the process
-// On Render free tier, this is fine for a prediction market
+const fs = require('fs');
+const path = require('path');
 
-let rounds = [];
-let bets = [];
-let roundIdSeq = 1;
-let betIdSeq = 1;
+const DB_FILE = path.join(__dirname, 'data.json');
+
+function load() {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    }
+  } catch (e) { console.error('[db] load error:', e.message); }
+  return { rounds: [], bets: [], roundIdSeq: 1, betIdSeq: 1 };
+}
+
+function save(state) {
+  try { fs.writeFileSync(DB_FILE, JSON.stringify(state)); }
+  catch (e) { console.error('[db] save error:', e.message); }
+}
+
+let state = load();
+console.log(`[db] Loaded: ${state.rounds.length} rounds, ${state.bets.length} bets`);
 
 // ── Rounds ────────────────────────────────────────────────
 
 function insertRound({ start_time, end_time, start_price }) {
-  const round = {
-    id: roundIdSeq++,
-    start_time,
-    end_time,
-    start_price,
-    end_price: null,
-    outcome: null,
-    settled: 0,
-  };
-  rounds.push(round);
+  const round = { id: state.roundIdSeq++, start_time, end_time, start_price, end_price: null, outcome: null, settled: 0 };
+  state.rounds.push(round);
+  save(state);
   return round;
 }
 
 function updateRound(id, fields) {
-  const r = rounds.find(r => r.id === id);
-  if (r) Object.assign(r, fields);
+  const r = state.rounds.find(r => r.id === id);
+  if (r) { Object.assign(r, fields); save(state); }
 }
 
 function getCurrentRound() {
-  return [...rounds].reverse().find(r => r.settled === 0) || null;
+  return [...state.rounds].reverse().find(r => r.settled === 0) || null;
 }
 
 function getRoundById(id) {
-  return rounds.find(r => r.id === id) || null;
+  return state.rounds.find(r => r.id === id) || null;
 }
 
 function getRecentRounds(limit = 10) {
-  return rounds.filter(r => r.settled === 1).slice(-limit).reverse();
+  return state.rounds.filter(r => r.settled === 1).slice(-limit).reverse();
 }
 
 // ── Bets ──────────────────────────────────────────────────
 
 function insertBet({ round_id, wallet, direction, amount, tx_sig }) {
-  const bet = {
-    id: betIdSeq++,
-    round_id,
-    wallet,
-    direction,
-    amount,
-    tx_sig,
-    paid_out: 0,
-    exited: 0,
-    payout_sig: null,
-    created_at: Date.now(),
-  };
-  bets.push(bet);
+  const bet = { id: state.betIdSeq++, round_id, wallet, direction, amount, tx_sig, paid_out: 0, exited: 0, payout_sig: null, created_at: Date.now() };
+  state.bets.push(bet);
+  save(state);
   return bet;
 }
 
-function getBetById(id) {
-  return bets.find(b => b.id === parseInt(id)) || null;
-}
-
 function updateBet(id, fields) {
-  const b = bets.find(b => b.id === id);
-  if (b) Object.assign(b, fields);
+  const b = state.bets.find(b => b.id === id);
+  if (b) { Object.assign(b, fields); save(state); }
 }
 
 function getBetsForRound(round_id) {
-  return bets.filter(b => b.round_id === round_id);
+  return state.bets.filter(b => b.round_id === round_id);
 }
 
 function getBetByTxSig(tx_sig) {
-  return bets.find(b => b.tx_sig === tx_sig) || null;
+  return state.bets.find(b => b.tx_sig === tx_sig) || null;
+}
+
+function getBetById(id) {
+  return state.bets.find(b => b.id === parseInt(id)) || null;
 }
 
 function getPositionsForWallet(wallet) {
-  return bets
+  return state.bets
     .filter(b => b.wallet === wallet)
     .map(b => {
       const round = getRoundById(b.round_id);
-      return {
-        id: b.id,
-        round_id: b.round_id,
-        wallet: b.wallet,
-        direction: b.direction,
-        amount: b.amount,
-        tx_sig: b.tx_sig,
-        paid_out: b.paid_out,
-        exited: b.exited || 0,
-        payout_sig: b.payout_sig,
-        created_at: b.created_at,
-        outcome: round?.outcome,
-        start_price: round?.start_price,
-        end_price: round?.end_price,
-        end_time: round?.end_time,
-        settled: round?.settled || 0,
-      };
+      return { ...b, outcome: round?.outcome, start_price: round?.start_price, end_price: round?.end_price, end_time: round?.end_time, settled: round?.settled || 0 };
     })
     .reverse()
     .slice(0, 20);
