@@ -1,62 +1,47 @@
 const fetch = require('node-fetch');
 
-// Market configs - all prices in USD
 const MARKETS = {
-  NEET: {
-    symbol: 'NEET',
-    name: '$NEET',
-    source: 'dexscreener',
-    pair: '5wNu5QhdpRGrL37ffcd6TMMqZugQgxwafgz477rShtHy',
-    chain: 'solana',
-  },
-  BTC: {
-    symbol: 'BTC',
-    name: 'Bitcoin',
-    source: 'coingecko',
-    id: 'bitcoin',
-  },
-  SOL: {
-    symbol: 'SOL',
-    name: 'Solana',
-    source: 'coingecko',
-    id: 'solana',
-  },
-  HYPE: {
-    symbol: 'HYPE',
-    name: 'Hyperliquid',
-    source: 'coingecko',
-    id: 'hyperliquid',
-  },
+  NEET: { symbol:'NEET', name:'$NEET', source:'dexscreener', pair:'5wNu5QhdpRGrL37ffcd6TMMqZugQgxwafgz477rShtHy', chain:'solana' },
+  BTC:  { symbol:'BTC',  name:'Bitcoin',    source:'binance', id:'BTCUSDT' },
+  SOL:  { symbol:'SOL',  name:'Solana',     source:'binance', id:'SOLUSDT' },
+  HYPE: { symbol:'HYPE', name:'Hyperliquid',source:'binance', id:'HYPEUSDT' },
 };
+
+// Cache prices for 10s to avoid rate limits
+const cache = {};
 
 async function getPrice(marketSymbol = 'NEET') {
   const market = MARKETS[marketSymbol];
   if (!market) throw new Error(`Unknown market: ${marketSymbol}`);
 
+  // Return cache if fresh
+  if (cache[marketSymbol] && Date.now() - cache[marketSymbol].ts < 10000) {
+    return cache[marketSymbol].price;
+  }
+
   try {
+    let price = null;
+
     if (market.source === 'dexscreener') {
-      const res = await fetch(
-        `https://api.dexscreener.com/latest/dex/pairs/${market.chain}/${market.pair}`,
-        { timeout: 8000 }
-      );
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${market.pair}`, { timeout: 8000 });
       const data = await res.json();
-      const price = parseFloat(data?.pair?.priceUsd);
-      if (!price || isNaN(price)) throw new Error('Bad price');
-      return price;
+      price = parseFloat(data?.pair?.priceUsd);
     }
 
-    if (market.source === 'coingecko') {
-      const res = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${market.id}&vs_currencies=usd`,
-        { timeout: 8000 }
-      );
+    if (market.source === 'binance') {
+      const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${market.id}`, { timeout: 8000 });
       const data = await res.json();
-      const price = data?.[market.id]?.usd;
-      if (!price || isNaN(price)) throw new Error('Bad price');
-      return price;
+      price = parseFloat(data?.price);
     }
+
+    if (!price || isNaN(price)) throw new Error('Bad price');
+    cache[marketSymbol] = { price, ts: Date.now() };
+    return price;
+
   } catch (e) {
-    console.error(`[price] ${marketSymbol} fetch failed:`, e.message);
+    console.error(`[price] ${marketSymbol} failed:`, e.message);
+    // Return stale cache if available
+    if (cache[marketSymbol]) return cache[marketSymbol].price;
     return null;
   }
 }
