@@ -1,86 +1,88 @@
-const fs = require('fs');
-const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
-const DB_FILE = path.join(__dirname, 'data.json');
-
-function load() {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    }
-  } catch (e) { console.error('[db] load error:', e.message); }
-  return { rounds: [], bets: [], roundIdSeq: 1, betIdSeq: 1 };
-}
-
-function save(state) {
-  try { fs.writeFileSync(DB_FILE, JSON.stringify(state)); }
-  catch (e) { console.error('[db] save error:', e.message); }
-}
-
-let state = load();
-console.log(`[db] Loaded: ${state.rounds.length} rounds, ${state.bets.length} bets`);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
 // ── Rounds ────────────────────────────────────────────────
 
-function insertRound({ start_time, end_time, start_price }) {
-  const round = { id: state.roundIdSeq++, start_time, end_time, start_price, end_price: null, outcome: null, settled: 0 };
-  state.rounds.push(round);
-  save(state);
-  return round;
+async function insertRound({ start_time, end_time, start_price }) {
+  const { data, error } = await supabase
+    .from('rounds')
+    .insert({ start_time, end_time, start_price, settled: 0 })
+    .select().single();
+  if (error) throw error;
+  return data;
 }
 
-function updateRound(id, fields) {
-  const r = state.rounds.find(r => r.id === id);
-  if (r) { Object.assign(r, fields); save(state); }
+async function updateRound(id, fields) {
+  const { error } = await supabase.from('rounds').update(fields).eq('id', id);
+  if (error) throw error;
 }
 
-function getCurrentRound() {
-  return [...state.rounds].reverse().find(r => r.settled === 0) || null;
+async function getCurrentRound() {
+  const { data } = await supabase
+    .from('rounds').select('*').eq('settled', 0)
+    .order('id', { ascending: false }).limit(1).single();
+  return data || null;
 }
 
-function getRoundById(id) {
-  return state.rounds.find(r => r.id === id) || null;
+async function getRoundById(id) {
+  const { data } = await supabase.from('rounds').select('*').eq('id', id).single();
+  return data || null;
 }
 
-function getRecentRounds(limit = 10) {
-  return state.rounds.filter(r => r.settled === 1).slice(-limit).reverse();
+async function getRecentRounds(limit = 10) {
+  const { data } = await supabase
+    .from('rounds').select('*').eq('settled', 1)
+    .order('id', { ascending: false }).limit(limit);
+  return data || [];
 }
 
 // ── Bets ──────────────────────────────────────────────────
 
-function insertBet({ round_id, wallet, direction, amount, tx_sig }) {
-  const bet = { id: state.betIdSeq++, round_id, wallet, direction, amount, tx_sig, paid_out: 0, exited: 0, payout_sig: null, created_at: Date.now() };
-  state.bets.push(bet);
-  save(state);
-  return bet;
+async function insertBet({ round_id, wallet, direction, amount, tx_sig }) {
+  const { data, error } = await supabase
+    .from('bets')
+    .insert({ round_id, wallet, direction, amount, tx_sig, paid_out: 0, exited: 0, created_at: Date.now() })
+    .select().single();
+  if (error) throw error;
+  return data;
 }
 
-function updateBet(id, fields) {
-  const b = state.bets.find(b => b.id === id);
-  if (b) { Object.assign(b, fields); save(state); }
+async function updateBet(id, fields) {
+  const { error } = await supabase.from('bets').update(fields).eq('id', id);
+  if (error) throw error;
 }
 
-function getBetsForRound(round_id) {
-  return state.bets.filter(b => b.round_id === round_id);
+async function getBetsForRound(round_id) {
+  const { data } = await supabase.from('bets').select('*').eq('round_id', round_id);
+  return data || [];
 }
 
-function getBetByTxSig(tx_sig) {
-  return state.bets.find(b => b.tx_sig === tx_sig) || null;
+async function getBetByTxSig(tx_sig) {
+  const { data } = await supabase.from('bets').select('*').eq('tx_sig', tx_sig).single();
+  return data || null;
 }
 
-function getBetById(id) {
-  return state.bets.find(b => b.id === parseInt(id)) || null;
+async function getBetById(id) {
+  const { data } = await supabase.from('bets').select('*').eq('id', parseInt(id)).single();
+  return data || null;
 }
 
-function getPositionsForWallet(wallet) {
-  return state.bets
-    .filter(b => b.wallet === wallet)
-    .map(b => {
-      const round = getRoundById(b.round_id);
-      return { ...b, outcome: round?.outcome, start_price: round?.start_price, end_price: round?.end_price, end_time: round?.end_time, settled: round?.settled || 0 };
-    })
-    .reverse()
-    .slice(0, 20);
+async function getPositionsForWallet(wallet) {
+  const { data } = await supabase
+    .from('bets').select('*, rounds(outcome, start_price, end_price, end_time, settled)')
+    .eq('wallet', wallet).order('id', { ascending: false }).limit(20);
+  return (data || []).map(b => ({
+    ...b,
+    outcome: b.rounds?.outcome,
+    start_price: b.rounds?.start_price,
+    end_price: b.rounds?.end_price,
+    end_time: b.rounds?.end_time,
+    settled: b.rounds?.settled || 0,
+  }));
 }
 
 module.exports = {
