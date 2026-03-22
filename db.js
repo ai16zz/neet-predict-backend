@@ -7,10 +7,10 @@ const supabase = createClient(
 
 // ── Rounds ────────────────────────────────────────────────
 
-async function insertRound({ start_time, end_time, start_price }) {
+async function insertRound({ start_time, end_time, start_price, market = 'NEET' }) {
   const { data, error } = await supabase
     .from('rounds')
-    .insert({ start_time, end_time, start_price, settled: 0 })
+    .insert({ start_time, end_time, start_price, settled: 0, market })
     .select().single();
   if (error) throw error;
   return data;
@@ -21,9 +21,10 @@ async function updateRound(id, fields) {
   if (error) throw error;
 }
 
-async function getCurrentRound() {
+async function getCurrentRound(market = 'NEET') {
   const { data } = await supabase
-    .from('rounds').select('*').eq('settled', 0)
+    .from('rounds').select('*')
+    .eq('settled', 0).eq('market', market)
     .order('id', { ascending: false }).limit(1).single();
   return data || null;
 }
@@ -33,9 +34,10 @@ async function getRoundById(id) {
   return data || null;
 }
 
-async function getRecentRounds(limit = 10) {
+async function getRecentRounds(market = 'NEET', limit = 10) {
   const { data } = await supabase
-    .from('rounds').select('*').eq('settled', 1)
+    .from('rounds').select('*')
+    .eq('settled', 1).eq('market', market)
     .order('id', { ascending: false }).limit(limit);
   return data || [];
 }
@@ -73,7 +75,7 @@ async function getBetById(id) {
 
 async function getPositionsForWallet(wallet) {
   const { data } = await supabase
-    .from('bets').select('*, rounds(outcome, start_price, end_price, end_time, settled)')
+    .from('bets').select('*, rounds(outcome, start_price, end_price, end_time, settled, market)')
     .eq('wallet', wallet).order('id', { ascending: false }).limit(20);
   return (data || []).map(b => ({
     ...b,
@@ -82,6 +84,7 @@ async function getPositionsForWallet(wallet) {
     end_price: b.rounds?.end_price,
     end_time: b.rounds?.end_time,
     settled: b.rounds?.settled || 0,
+    market: b.rounds?.market || 'NEET',
   }));
 }
 
