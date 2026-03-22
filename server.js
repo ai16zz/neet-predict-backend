@@ -67,6 +67,41 @@ app.get('/price', async (_, res) => {
   res.json({ price: await getPrice() });
 });
 
+// ── Admin: recover unpaid one-sided bets ─────────────────
+app.post('/admin/recover', async (req, res) => {
+  try {
+    const { getBetsForRound, getRoundById } = require('./db');
+    const allBets = require('./db').getPositionsForWallet; // just use state directly
+    const state = require('./db');
+    // Find all unsettled-payment bets from settled rounds
+    const { sendPayout } = require('./solana');
+    const FEE_LOCAL = parseFloat(process.env.FEE || '0.03');
+    let recovered = 0;
+    // Access raw state
+    const fs = require('fs'), path = require('path');
+    const data = JSON.parse(fs.readFileSync(path.join(__dirname,'data.json')));
+    for (const bet of data.bets) {
+      if (bet.paid_out || bet.exited) continue;
+      const round = data.rounds.find(r => r.id === bet.round_id);
+      if (!round || !round.settled) continue;
+      // One-sided: only this wallet bet
+      const roundBets = data.bets.filter(b => b.round_id === bet.round_id && !b.exited);
+      const hasBothSides = roundBets.some(b=>b.direction==='UP') && roundBets.some(b=>b.direction==='DOWN');
+      if (!hasBothSides) {
+        // Refund full amount
+        try {
+          const sig = await sendPayout(bet.wallet, bet.amount);
+          bet.paid_out = 1; bet.payout_sig = sig;
+          recovered++;
+          console.log(`[recover] Refunded bet#${bet.id} ${bet.amount} SOL → ${bet.wallet}`);
+        } catch(e) { console.error(`[recover] bet#${bet.id} failed: ${e.message}`); }
+      }
+    }
+    fs.writeFileSync(path.join(__dirname,'data.json'), JSON.stringify(data));
+    res.json({ recovered });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Early exit ────────────────────────────────────────────
 app.post('/exit', async (req, res) => {
   try {

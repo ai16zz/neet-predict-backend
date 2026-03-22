@@ -62,15 +62,15 @@ async function payoutWinners(roundId, outcome, round) {
   const totalWin = winners.reduce((s, b) => s + b.amount, 0);
   const totalAll = bets.reduce((s, b) => s + b.amount, 0);
 
-  // If nobody bet the losing side, refund everyone fully (no game happened)
-  if (losers.length === 0) {
-    console.log(`[rounds] One-sided round #${roundId} — refunding all ${bets.length} bets`);
+  // If nobody bet the winning side OR nobody bet the losing side = no real game, refund all
+  if (winners.length === 0 || losers.length === 0) {
+    console.log(`[rounds] One-sided round #${roundId} (${outcome}) — refunding all ${bets.length} bets`);
     for (const bet of bets) {
       if (bet.paid_out) continue;
       try {
-        const sig = await sendPayout(bet.wallet, bet.amount); // full refund
+        const sig = await sendPayout(bet.wallet, bet.amount);
         updateBet(bet.id, { paid_out: 1, payout_sig: sig });
-        console.log(`[rounds] Full refund ${bet.amount.toFixed(4)} SOL → ${bet.wallet}`);
+        console.log(`[rounds] Full refund ${bet.amount} SOL → ${bet.wallet}`);
       } catch (e) {
         console.error(`[rounds] Refund failed bet#${bet.id}: ${e.message}`);
       }
