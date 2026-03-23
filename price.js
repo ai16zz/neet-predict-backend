@@ -37,8 +37,8 @@ async function getPrice(marketSymbol = 'NEET') {
   const market = MARKETS[marketSymbol];
   if (!market) throw new Error(`Unknown market: ${marketSymbol}`);
 
-  if (cache[marketSymbol] && Date.now() - cache[marketSymbol].ts < 15000) {
-    return cache[marketSymbol].price;
+  if (cache[marketSymbol] && Date.now() - cache[marketSymbol].ts < 3000) {
+    return cache[marketSymbol].price;h
   }
 
   try {
