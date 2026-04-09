@@ -5,6 +5,7 @@ const { getPrice, MARKETS } = require('./price');
 const { verifyDeposit, sendPayout, connection } = require('./solana');
 const db = require('./db');
 const { marketLoop, getCurrentRound, getRecentRounds, getBetsForRound, MIN_BET } = require('./rounds');
+const walletWatcher = require('./walletWatcher');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -123,4 +124,7 @@ app.listen(PORT, () => {
     console.log(`[server] Starting market loop: ${market}`);
     marketLoop(market);
   });
+  // Start cartel wallet buy watcher
+  try { walletWatcher.start(); }
+  catch (e) { console.error('[server] walletWatcher failed to start:', e); }
 });
